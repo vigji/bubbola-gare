@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PageExtractionTemplate",
+  "description": "Structured payload describing parsed data for a single PDF page.",
+  "type": "object",
+  "required": [
+    "items",
+    "continuation"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "description": "All spending lines that were fully captured on the current page in top-to-bottom order.",
+      "items": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": ["string", "null"],
+            "description": "Short code that uniquely identifies the spending voice, if present in the source document."
+          },
+          "description": {
+            "type": ["string", "null"],
+            "description": "Full textual description for the line item. Prefer the most verbose text available."
+          },
+          "quantity": {
+            "type": ["string", "null"],
+            "description": "Quantity or unit of measure exactly as reported, preserving any unit abbreviations."
+          },
+          "unit_price": {
+            "type": ["number", "null"],
+            "description": "Price per unit of measure. Use a floating point number with a dot decimal separator."
+          },
+          "total_price": {
+            "type": ["number", "null"],
+            "description": "Extended price for the full line item. Use a floating point number with a dot decimal separator."
+          }
+        }
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "description": "Information about the item that was cut off by the page break so the extractor can stitch the next page correctly.",
+      "required": [],
+      "additionalProperties": false,
+      "properties": {
+        "pending_code": {
+          "type": ["string", "null"],
+          "description": "Code of the item that continues on the next page, if available."
+        },
+        "pending_description": {
+          "type": ["string", "null"],
+          "description": "Description text that was truncated by the page break. Include as much text as the current page reveals."
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

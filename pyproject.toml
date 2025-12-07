@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bubbola-gare"
+version = "0.1.0"
+description = "Order search pipeline: ingest, preprocess, embed, hybrid search."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "openai>=1.63",
+    "tiktoken>=0.8",
+    "rank-bm25>=0.2.2",
+    "tqdm>=4.66",
+    "python-dotenv>=1.0",
+    "plotly>=5.24",
+    "scikit-learn>=1.4",
+    "pyarrow>=17.0",
+    "openpyxl>=3.1",
+    "ipykernel>=7.1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "psycopg[binary,pool]>=3.2",
+    "pgvector>=0.3.5",
+]
+
+[tool.uv]
+package = true

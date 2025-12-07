@@ -1,0 +1,52 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: orders
+      POSTGRES_PASSWORD: orders
+      POSTGRES_DB: orders
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orders"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  loader:
+    build: .
+    command: ["python", "-m", "bubbola_gare.db_loader", "--path", "/app/data/processed/orders_db_ready.parquet", "--truncate"]
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: orders
+      PGPASSWORD: orders
+      PGDATABASE: orders
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    build: .
+    command: ["uvicorn", "bubbola_gare.service.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: orders
+      PGPASSWORD: orders
+      PGDATABASE: orders
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set in .env}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      loader:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
