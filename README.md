@@ -9,9 +9,10 @@ Refactored pipeline to ingest the Excel orders table, produce LLM summaries, emb
 
 ## Quickstart (docker-compose: Postgres + pgvector)
 - Ensure `data/processed/orders_db_ready.parquet` exists (run steps in "Data pipeline" + `uv run python -m bubbola_gare.db_prepare`).
-- Start everything: `OPENAI_API_KEY=... docker compose up --build`.
-  - Services: `db` (Postgres + pgvector), `loader` (one-shot import of reduced vectors), `app` (FastAPI at :8000). Embeddings are reduced to <=1999 dims so an IVFFlat index is created automatically.
+- Start everything (API + MCP): `docker compose up --build` (compose reads `.env` automatically).
+  - Services: `db` (Postgres + pgvector), `loader` (one-shot import of reduced vectors), `app` (FastAPI at :8000), `mcp` (streamable HTTP MCP at :8100). Embeddings are reduced to <=1999 dims so an IVFFlat index is created automatically.
 - Health check: `curl http://localhost:8000/health` → `{ "status": "ok" }`.
+- MCP endpoint: streamable HTTP at `http://localhost:8100/mcp` (configured via `LLM_PROVIDER`, `OPENAI_MODEL` or `OLLAMA_MODEL` env). Point your MCP client to that URL; docker compose already starts the DB and loader.
 - Search example (POST):
   ```bash
   curl -X POST http://localhost:8000/search \
@@ -51,6 +52,16 @@ End-to-end locally (with API):
   - Requires env: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `OPENAI_API_KEY`.
   - Test: `curl http://localhost:8000/health`
 
+## Analytics & NL-to-SQL
+- Run ad-hoc SQL safely:  
+  `curl -X POST http://localhost:8000/analytics/sql -H "Content-Type: application/json" -d '{"sql": "select vendor, sum(amount) as total from orders group by vendor order by total desc limit 5"}'`
+- Natural language analytics (SQL is generated and enforced read-only/limited):  
+  `curl -X POST http://localhost:8000/analytics/nlq -H "Content-Type: application/json" -d '{"question": "Top 5 vendors by total spend in 2024"}'`
+- Semantic similarity analytics (by text or order code, with filters):  
+  `curl -X POST http://localhost:8000/analytics/semantic -H "Content-Type: application/json" -d '{"order_code": "12345", "top_k": 5, "filters": {"region": "Lombardia"}}'`
+- Schema endpoint: `curl http://localhost:8000/analytics/schema`
+- Limits are clamped to `SQL_MAX_LIMIT` (env, default 500) and only the `orders` table is allowed.
+
 ## Searching (summary embeddings only)
 - Run a quick local search over summary embeddings:  
   `uv run python -m bubbola_gare.pipeline search "query terms" --top-k 10 --alpha 0.4`  
@@ -70,3 +81,20 @@ End-to-end locally (with API):
 ## Notes
 - Adjust `TEXT_COLUMNS`, `ID_COLUMN`, `VENDOR_COLUMN`, and embedding/search knobs in `.env`.
 - Intermediate parquet files preserve row references so you can join back to the original table even after filtering.
+- MCP server (analytics tools over the DB):
+  - Run locally over stdio: `uv run python -m bubbola_gare.service.mcp_server --transport stdio`
+  - Or expose over HTTP (used in docker-compose): `uv run python -m bubbola_gare.service.mcp_server --transport streamable-http --host 0.0.0.0 --port 8100`
+  - Tools: `list_schema`, `run_sql` (read-only with enforced LIMIT + allowlist), `ask_orders` (NL->SQL), `semantic_search` (by text or order_code with filters), and `sample_questions`.
+- LLM provider config (set in `.env`):  
+  - `LLM_PROVIDER=openai|ollama` (default openai)  
+  - For Ollama: `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1`, `OLLAMA_MODEL=qwen3-coder:30b` (used for SQL generation / chat), set `EMBEDDING_MODEL` to a model that serves embeddings.  
+  - For OpenAI: `OPENAI_API_KEY=...`, `OPENAI_MODEL=gpt-4.1-mini` (used for SQL generation), `EMBEDDING_MODEL=text-embedding-3-large`.
+
+## MCP query gallery (sample requests)
+- Top spenders: `ask_orders` with question `"Top 10 vendors by total spend in 2024"`
+- Regional filter: `ask_orders` with question `"Monthly spend in Lombardia grouped by vendor for 2024"`
+- Order lookup: `run_sql` with SQL `select order_code, vendor, amount from orders where order_code ilike 'ABC%' limit 20`
+- Similar by text: `semantic_search` with `query_text="guanti in nitrile taglia L", top_k=5`
+- Similar by order code: `semantic_search` with `order_code="12345", filters={region: "Lombardia"}`
+- Thresholded amounts: `ask_orders` with question `"Orders over 10000 EUR for vendor ACME in 2023"`
+- Category trend: `ask_orders` with question `"Total amount per category per month for the last 6 months"`

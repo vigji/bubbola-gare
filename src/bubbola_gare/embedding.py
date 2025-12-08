@@ -24,6 +24,8 @@ from .config import (
     EMBED_WARN_MARGIN,
     EMBED_OUTPUT_DIM,
     EMBEDDING_MODEL,
+    LLM_PROVIDER,
+    OLLAMA_BASE_URL,
     OPENAI_API_KEY,
 )
 
@@ -31,12 +33,18 @@ logger = logging.getLogger(__name__)
 _client: Optional[OpenAI] = None
 
 
+def _client_params() -> dict:
+    if LLM_PROVIDER == "ollama":
+        return {"api_key": "ollama", "base_url": OLLAMA_BASE_URL}
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is missing. Please set it in your .env.")
+    return {"api_key": OPENAI_API_KEY}
+
+
 def get_openai_client() -> OpenAI:
     global _client
     if _client is None:
-        if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY is missing. Please set it in your .env.")
-        _client = OpenAI(api_key=OPENAI_API_KEY)
+        _client = OpenAI(**_client_params())
     return _client
 
 

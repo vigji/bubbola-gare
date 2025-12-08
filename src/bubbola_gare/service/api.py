@@ -4,36 +4,21 @@ import logging
 from datetime import date
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI
-from pydantic import BaseModel, Field
-from psycopg_pool import ConnectionPool
-from pgvector.psycopg import register_vector
 import psycopg
+from fastapi import Depends, FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
-from ..config import (
-    PGDATABASE,
-    PGHOST,
-    PGPORT,
-    PGPASSWORD,
-    PGUSER,
-    PG_MAX_CONN,
-    PG_MIN_CONN,
-)
+from ..config import PGDATABASE, PGHOST, SQL_DEFAULT_LIMIT, SQL_MAX_LIMIT
 from ..embedding import embed_texts, l2_normalize
 from ..preprocessing import normalize_text
 from ..summarization import SUMMARY_COLUMN
+from .analytics import AnalyticsEngine, ORDERS_SCHEMA_TEXT
+from .db import connection_scope, get_pool
 
 logger = logging.getLogger(__name__)
 
-conninfo = f"postgresql://{PGUSER}:{PGPASSWORD}@{PGHOST}:{PGPORT}/{PGDATABASE}"
-pool = ConnectionPool(
-    conninfo=conninfo,
-    min_size=PG_MIN_CONN,
-    max_size=PG_MAX_CONN,
-    configure=register_vector,
-)
-
 app = FastAPI(title="Orders similarity service (Postgres + pgvector)", version="1.0.0")
+analytics_engine = AnalyticsEngine(pool=get_pool())
 
 
 class SearchFilters(BaseModel):
@@ -72,6 +57,57 @@ class SearchHit(BaseModel):
 class SearchResponse(BaseModel):
     query: str
     filters: SearchFilters
+    results: List[SearchHit]
+
+
+class SqlQueryRequest(BaseModel):
+    sql: str = Field(..., description="Read-only SQL to run against the orders table")
+    params: dict = Field(default_factory=dict, description="Optional parameters for the SQL query")
+    max_rows: int = Field(
+        SQL_DEFAULT_LIMIT, ge=1, le=SQL_MAX_LIMIT, description="Maximum rows to return (LIMIT enforced)"
+    )
+
+
+class SqlQueryResponse(BaseModel):
+    sql: str
+    columns: List[str]
+    rows: List[dict]
+    warnings: List[str] = Field(default_factory=list)
+
+
+class NLQueryRequest(BaseModel):
+    question: str = Field(..., description="Natural language analytics request")
+    max_rows: int = Field(
+        SQL_DEFAULT_LIMIT, ge=1, le=SQL_MAX_LIMIT, description="Maximum rows to return (LIMIT enforced)"
+    )
+
+
+class NLQueryResponse(BaseModel):
+    question: str
+    sql: str
+    rationale: Optional[str]
+    columns: List[str]
+    rows: List[dict]
+    warnings: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class SchemaResponse(BaseModel):
+    schema: str
+    columns: List[str]
+
+
+class SemanticQueryRequest(BaseModel):
+    query: Optional[str] = Field(None, description="Free-text description to find similar orders")
+    order_code: Optional[str] = Field(
+        None, description="Existing order code to use as the anchor for similarity search"
+    )
+    top_k: int = Field(5, ge=1, le=200, description="Number of similar orders to return")
+    filters: SearchFilters = Field(default_factory=SearchFilters)
+
+
+class SemanticQueryResponse(BaseModel):
+    request: SemanticQueryRequest
     results: List[SearchHit]
 
 
@@ -116,23 +152,21 @@ def _build_where_clause(filters: SearchFilters, params: dict) -> str:
 
 @app.on_event("startup")
 def _startup() -> None:
-    pool.open()
+    get_pool().open()
     logger.info("Connection pool opened (host=%s db=%s)", PGHOST, PGDATABASE)
 
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
-    pool.close()
+    get_pool().close()
 
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
 
-
 def _get_conn():
-    with pool.connection() as conn:
-        yield conn
+    yield from connection_scope()
 
 
 @app.post("/search", response_model=SearchResponse)
@@ -169,6 +203,77 @@ def search_orders(payload: SearchRequest, conn: psycopg.Connection = Depends(_ge
     ]
 
     return SearchResponse(query=payload.query, filters=payload.filters, results=results)
+
+
+@app.get("/analytics/schema", response_model=SchemaResponse)
+def get_schema() -> SchemaResponse:
+    from .analytics import ORDERS_COLUMNS
+
+    return SchemaResponse(schema=ORDERS_SCHEMA_TEXT, columns=list(ORDERS_COLUMNS.keys()))
+
+
+@app.post("/analytics/sql", response_model=SqlQueryResponse)
+def run_sql_query(payload: SqlQueryRequest, conn: psycopg.Connection = Depends(_get_conn)) -> SqlQueryResponse:
+    result = analytics_engine.run_sql(payload.sql, params=payload.params, limit=payload.max_rows, conn=conn)
+    return SqlQueryResponse(sql=result.sql, columns=result.columns, rows=result.rows, warnings=result.warnings)
+
+
+@app.post("/analytics/nlq", response_model=NLQueryResponse)
+def run_nl_query(payload: NLQueryRequest, conn: psycopg.Connection = Depends(_get_conn)) -> NLQueryResponse:
+    result = analytics_engine.run_nl(question=payload.question, limit=payload.max_rows, conn=conn)
+    return NLQueryResponse(
+        question=result.question,
+        sql=result.sql,
+        rationale=result.rationale,
+        columns=result.columns,
+        rows=result.rows,
+        warnings=result.warnings,
+        error=result.error,
+    )
+
+
+def _resolve_query_vector(payload: SemanticQueryRequest, conn: psycopg.Connection) -> list[float]:
+    if payload.query:
+        return _query_vector(payload.query)
+    if payload.order_code:
+        return analytics_engine.vector_for_order_code(payload.order_code, conn=conn)
+    raise HTTPException(status_code=400, detail="Provide either 'query' or 'order_code'.")
+
+
+@app.post("/analytics/semantic", response_model=SemanticQueryResponse)
+def semantic_search(payload: SemanticQueryRequest, conn: psycopg.Connection = Depends(_get_conn)) -> SemanticQueryResponse:
+    if not payload.query and not payload.order_code:
+        raise HTTPException(status_code=400, detail="Provide either 'query' or 'order_code'.")
+
+    try:
+        query_vec = _resolve_query_vector(payload, conn)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    results = analytics_engine.semantic_search(
+        query_vector=query_vec,
+        top_k=payload.top_k,
+        filters=payload.filters.model_dump(),
+        conn=conn,
+    )
+    hits = [
+        SearchHit(
+            record_id=r.get("record_id"),
+            order_code=r.get("order_code"),
+            order_date=r.get("order_date"),
+            delivery_date=r.get("delivery_date"),
+            vendor=r.get("vendor"),
+            region=r.get("region"),
+            category=r.get("category"),
+            contract_type=r.get("contract_type"),
+            order_type=r.get("order_type"),
+            amount=r.get("amount"),
+            summary=r.get(SUMMARY_COLUMN),
+            similarity=r.get("similarity", 0.0),
+        )
+        for r in results
+    ]
+    return SemanticQueryResponse(request=payload, results=hits)
 
 
 if __name__ == "__main__":

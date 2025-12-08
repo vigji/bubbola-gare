@@ -25,6 +25,7 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "psycopg[binary,pool]>=3.2",
     "pgvector>=0.3.5",
+    "mcp>=1.23.1",
 ]
 
 [tool.uv]

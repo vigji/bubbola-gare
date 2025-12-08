@@ -12,6 +12,13 @@ DATA_DIR = REPO_ROOT / "data"
 PROCESSED_DIR = DATA_DIR / "processed"
 CACHE_DIR = DATA_DIR / "cache"
 
+# LLM provider selection
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:latest")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 # Input/output locations
 RAW_EXCEL_PATH = Path(
     os.getenv("RAW_EXCEL_PATH", DATA_DIR / "gesa_dump.xlsx")
@@ -47,7 +54,6 @@ ID_COLUMN = os.getenv("ID_COLUMN", "ordine_n")
 VENDOR_COLUMN = os.getenv("VENDOR_COLUMN", "fornitore")
 
 # Embedding + search tuning
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large")
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-5-nano-2025-08-07")
 SUMMARY_CONCURRENCY = int(os.getenv("SUMMARY_CONCURRENCY", "90"))
@@ -58,6 +64,14 @@ AVG_CHARS_PER_TOKEN = int(os.getenv("AVG_CHARS_PER_TOKEN", "4"))
 DEFAULT_TOP_K = int(os.getenv("DEFAULT_TOP_K", "10"))
 DEFAULT_ALPHA = float(os.getenv("DEFAULT_ALPHA", "0.4"))
 EMBED_OUTPUT_DIM = int(os.getenv("EMBED_OUTPUT_DIM", "1999"))
+
+# Analytics / SQL generation
+SQL_GENERATION_MODEL = os.getenv(
+    "SQL_GENERATION_MODEL",
+    OPENAI_MODEL if LLM_PROVIDER == "openai" else OLLAMA_MODEL,
+)
+SQL_DEFAULT_LIMIT = int(os.getenv("SQL_DEFAULT_LIMIT", "200"))
+SQL_MAX_LIMIT = int(os.getenv("SQL_MAX_LIMIT", "500"))
 
 # Search parameters
 BM25_K1 = float(os.getenv("BM25_K1", "1.5"))
