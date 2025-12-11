@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from itertools import islice
 from pathlib import Path
 from typing import Iterable
 
@@ -16,6 +17,9 @@ from .config import (
     PGPORT,
     PGPASSWORD,
     PGUSER,
+    RAW_DATE_COLUMNS,
+    RAW_NUMERIC_COLUMNS,
+    RAW_SOURCE_COLUMNS,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,44 +30,56 @@ def _conn_str(database: str | None = None) -> str:
     return f"postgresql://{PGUSER}:{PGPASSWORD}@{PGHOST}:{PGPORT}/{db}"
 
 
+BASE_COLUMN_TYPES = {
+    "record_id": "BIGINT PRIMARY KEY",
+    "order_code": "TEXT",
+    "order_date": "DATE",
+    "delivery_date": "DATE",
+    "category": "TEXT",
+    "contract_type": "TEXT",
+    "order_type": "TEXT",
+    "requester": "TEXT",
+    "executor": "TEXT",
+    "vendor": "TEXT",
+    "region": "TEXT",
+    "city": "TEXT",
+    "province": "TEXT",
+    "country": "TEXT",
+    "cap": "TEXT",
+    "amount": "NUMERIC",
+    "text_raw": "TEXT",
+    "text_normalized": "TEXT",
+    "order_summary": "TEXT",
+    "summary_normalized": "TEXT",
+}
+RAW_SOURCE_COLUMNS_UNIQUE = [c for c in RAW_SOURCE_COLUMNS if c not in BASE_COLUMN_TYPES]
+
+
+def _raw_column_type(col: str) -> str:
+    if col in RAW_NUMERIC_COLUMNS:
+        return "NUMERIC"
+    if col in RAW_DATE_COLUMNS:
+        return "DATE"
+    return "TEXT"
+
+
 def ensure_schema(conn: psycopg.Connection, embed_dim: int) -> None:
     with conn.cursor() as cur:
         # Recreate table to ensure column type matches current setting (vector, not legacy halfvec/vector mix).
         cur.execute("DROP TABLE IF EXISTS orders CASCADE;")
-        cur.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS orders (
-                record_id BIGINT PRIMARY KEY,
-                order_code TEXT,
-                order_date DATE,
-                delivery_date DATE,
-                category TEXT,
-                contract_type TEXT,
-                order_type TEXT,
-                requester TEXT,
-                executor TEXT,
-                vendor TEXT,
-                region TEXT,
-                city TEXT,
-                province TEXT,
-                country TEXT,
-                cap TEXT,
-                amount NUMERIC,
-                text_raw TEXT,
-                text_normalized TEXT,
-                order_summary TEXT,
-                summary_normalized TEXT,
-                summary_embedding vector({embed_dim}) NOT NULL
-            );
-            """
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS orders_region_idx ON orders (region);")
-        cur.execute("CREATE INDEX IF NOT EXISTS orders_order_date_idx ON orders (order_date);")
-        cur.execute("CREATE INDEX IF NOT EXISTS orders_vendor_idx ON orders (vendor);")
+        column_defs = [
+            *(f"\"{col}\" {ctype}" for col, ctype in BASE_COLUMN_TYPES.items()),
+            *(f"\"{col}\" {_raw_column_type(col)}" for col in RAW_SOURCE_COLUMNS_UNIQUE),
+            f"\"summary_embedding\" vector({embed_dim}) NOT NULL",
+        ]
+        cur.execute(f"CREATE TABLE IF NOT EXISTS orders ({', '.join(column_defs)});")
+        cur.execute('CREATE INDEX IF NOT EXISTS orders_region_idx ON orders ("region");')
+        cur.execute('CREATE INDEX IF NOT EXISTS orders_order_date_idx ON orders ("order_date");')
+        cur.execute('CREATE INDEX IF NOT EXISTS orders_vendor_idx ON orders ("vendor");')
         if embed_dim <= 2000:
             cur.execute(
-                "CREATE INDEX IF NOT EXISTS orders_summary_embedding_idx ON orders "
-                "USING ivfflat (summary_embedding vector_cosine_ops) WITH (lists = 200);"
+                'CREATE INDEX IF NOT EXISTS orders_summary_embedding_idx ON orders '
+                'USING ivfflat ("summary_embedding" vector_cosine_ops) WITH (lists = 200);'
             )
         else:
             logger.warning(
@@ -95,7 +111,7 @@ def _prepare_rows(df: pd.DataFrame) -> Iterable[dict]:
         emb = getattr(row, "summary_embedding", None)
         if hasattr(emb, "tolist"):
             emb = emb.tolist()
-        yield {
+        base = {
             "record_id": int(row.record_id),
             "order_code": _null_if_na(getattr(row, "order_code", None)),
             "order_date": _null_if_na(getattr(row, "order_date", None)),
@@ -116,8 +132,11 @@ def _prepare_rows(df: pd.DataFrame) -> Iterable[dict]:
             "text_normalized": _null_if_na(getattr(row, "text_normalized", None)),
             "order_summary": _null_if_na(getattr(row, "order_summary", None)),
             "summary_normalized": _null_if_na(getattr(row, "summary_normalized", None)),
-            "summary_embedding": emb if emb is not None else None,
         }
+        for col in RAW_SOURCE_COLUMNS_UNIQUE:
+            base[col] = _null_if_na(getattr(row, col, None))
+        base["summary_embedding"] = emb if emb is not None else None
+        yield base
 
 
 def load_orders(
@@ -133,31 +152,29 @@ def load_orders(
             logger.info("Truncated existing rows")
     conn.commit()
 
-    rows = list(_prepare_rows(df))
+    insert_columns = list(BASE_COLUMN_TYPES.keys()) + list(RAW_SOURCE_COLUMNS_UNIQUE) + ["summary_embedding"]
+    insert_columns_sql = ", ".join(f"\"{c}\"" for c in insert_columns)
+    values_clause = ", ".join(
+        [f"%({col})s" if col != "summary_embedding" else "%(summary_embedding)s::vector" for col in insert_columns]
+    )
+    update_clause = ", ".join(
+        [f"\"{col}\" = EXCLUDED.\"{col}\"" for col in insert_columns if col != "record_id"]
+    )
     query = (
-        "INSERT INTO orders (record_id, order_code, order_date, delivery_date, category, contract_type, "
-        "order_type, requester, executor, vendor, region, city, province, country, cap, amount, text_raw, "
-        "text_normalized, order_summary, summary_normalized, summary_embedding) "
-        "VALUES (%(record_id)s, %(order_code)s, %(order_date)s, %(delivery_date)s, %(category)s, %(contract_type)s, "
-        "%(order_type)s, %(requester)s, %(executor)s, %(vendor)s, %(region)s, %(city)s, %(province)s, %(country)s, "
-        "%(cap)s, %(amount)s, %(text_raw)s, %(text_normalized)s, %(order_summary)s, %(summary_normalized)s, %(summary_embedding)s::vector) "
-        "ON CONFLICT (record_id) DO UPDATE SET "
-        "order_code = EXCLUDED.order_code, order_date = EXCLUDED.order_date, delivery_date = EXCLUDED.delivery_date, "
-        "category = EXCLUDED.category, contract_type = EXCLUDED.contract_type, order_type = EXCLUDED.order_type, "
-        "requester = EXCLUDED.requester, executor = EXCLUDED.executor, vendor = EXCLUDED.vendor, "
-        "region = EXCLUDED.region, city = EXCLUDED.city, province = EXCLUDED.province, country = EXCLUDED.country, "
-        "cap = EXCLUDED.cap, amount = EXCLUDED.amount, text_raw = EXCLUDED.text_raw, "
-        "text_normalized = EXCLUDED.text_normalized, order_summary = EXCLUDED.order_summary, "
-        "summary_normalized = EXCLUDED.summary_normalized, summary_embedding = EXCLUDED.summary_embedding"
+        f"INSERT INTO orders ({insert_columns_sql}) VALUES ({values_clause}) "
+        f"ON CONFLICT (record_id) DO UPDATE SET {update_clause}"
     )
     with conn.cursor() as cur:
-        for i in range(0, len(rows), batch_size):
-            batch = rows[i : i + batch_size]
+        rows_iter = _prepare_rows(df)
+        total = 0
+        while True:
+            batch = list(islice(rows_iter, batch_size))
             if not batch:
-                continue
+                break
             cur.executemany(query, batch)
-        conn.commit()
-    logger.info("Loaded %d rows into orders table", len(rows))
+            conn.commit()  # commit per batch to keep memory/txn small
+            total += len(batch)
+        logger.info("Loaded %d rows into orders table", total)
 
 
 def load_parquet_to_db(

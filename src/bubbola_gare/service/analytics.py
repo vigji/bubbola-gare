@@ -13,6 +13,7 @@ from openai import OpenAI
 from psycopg.rows import dict_row
 
 from ..config import (
+    RAW_SOURCE_COLUMNS,
     SQL_DEFAULT_LIMIT,
     SQL_GENERATION_MODEL,
     SQL_MAX_LIMIT,
@@ -46,6 +47,8 @@ ORDERS_COLUMNS: dict[str, str] = {
     "summary_normalized": "Normalized summary used for embeddings.",
     "summary_embedding": "Vector embedding of the normalized summary.",
 }
+for raw_col in RAW_SOURCE_COLUMNS:
+    ORDERS_COLUMNS.setdefault(raw_col, "Raw column from the source file (kept verbatim).")
 
 ORDERS_SCHEMA_TEXT = "\n".join(
     [
@@ -126,12 +129,12 @@ def enforce_safe_sql(
     if tables and not tables.issubset(allowed):
         raise ValueError(f"Query references tables outside allowlist: {tables - allowed}")
 
-    limit_match = re.search(r"limit\\s+(\\d+)", lowered)
+    limit_match = re.search(r"limit\s+(\d+)", lowered)
     if limit_match:
         limit_val = int(limit_match.group(1))
         if limit_val > max_limit:
             warnings.append(f"LIMIT reduced from {limit_val} to {max_limit}")
-            cleaned = re.sub(r"limit\\s+\\d+", f"LIMIT {max_limit}", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"limit\s+\d+", f"LIMIT {max_limit}", cleaned, flags=re.IGNORECASE)
     else:
         cleaned = f"{cleaned} LIMIT {default_limit}"
         warnings.append(f"Added default LIMIT {default_limit}")
@@ -140,12 +143,14 @@ def enforce_safe_sql(
 
 
 def execute_sql(conn: psycopg.Connection, sql: str, params: Dict[str, Any] | None = None) -> QueryResult:
+    # psycopg treats `%` as a placeholder marker; double it to keep literal patterns (e.g., ILIKE '%foo%').
+    safe_sql = sql.replace("%", "%%")
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql, params or {})
+        cur.execute(safe_sql, params or {})
         rows = cur.fetchall()
-        columns = list(cur.column_names)  # type: ignore[attr-defined]
+        columns = [d.name for d in (cur.description or [])]
     serialized = [{k: _serialize_value(v) for k, v in row.items()} for row in rows]
-    return QueryResult(sql=sql, columns=columns, rows=serialized, warnings=[])
+    return QueryResult(sql=safe_sql, columns=columns, rows=serialized, warnings=[])
 
 
 @dataclass

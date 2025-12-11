@@ -7,7 +7,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from ..config import SQL_DEFAULT_LIMIT
-from ..embedding import embed_texts, l2_normalize
+from ..embedding import embed_query_vectors
 from ..preprocessing import normalize_text
 from .analytics import AnalyticsEngine, ORDERS_COLUMNS, ORDERS_SCHEMA_TEXT
 from .db import get_pool
@@ -67,8 +67,8 @@ def build_server(host: str = "0.0.0.0", port: int = 8100) -> FastMCP:
 
     def _text_vector(text: str) -> list[float]:
         norm = normalize_text(text)
-        vec = embed_texts([norm])
-        return l2_normalize(vec)[0].astype(float).tolist()
+        vec = embed_query_vectors([norm])[0]
+        return vec.astype(float).tolist()
 
     @server.tool(
         name="semantic_search",

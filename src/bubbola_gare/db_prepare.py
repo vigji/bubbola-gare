@@ -12,7 +12,10 @@ import pandas as pd
 from .config import (
     DB_READY_PATH,
     ID_COLUMN,
+    RAW_DATE_COLUMNS,
+    RAW_NUMERIC_COLUMNS,
     RAW_PARQUET_PATH,
+    RAW_SOURCE_COLUMNS,
     SUMMARY_EMBEDDINGS_PATH,
     SUMMARY_PATH,
     TEXT_COLUMNS,
@@ -82,6 +85,14 @@ def build_db_ready_dataframe(
     drop_missing_vectors: bool = True,
 ) -> pd.DataFrame:
     raw_df = pd.read_parquet(raw_path)
+    for col in RAW_SOURCE_COLUMNS:
+        if col not in raw_df.columns:
+            raw_df[col] = None
+    for col in RAW_DATE_COLUMNS:
+        raw_df[col] = pd.to_datetime(raw_df[col], errors="coerce").dt.date
+    for col in RAW_NUMERIC_COLUMNS:
+        raw_df[col] = pd.to_numeric(raw_df[col], errors="coerce")
+
     df = raw_df.reset_index(drop=False).rename(columns={"index": "source_row"})
     df["record_id"] = df.index.astype("int64")
 
@@ -131,7 +142,7 @@ def build_db_ready_dataframe(
     if dropped:
         logger.info("Dropped %d rows without summary embeddings", dropped)
 
-    keep_cols = [
+    base_cols = [
         "record_id",
         "source_row",
         "order_code",
@@ -155,8 +166,8 @@ def build_db_ready_dataframe(
         "summary_normalized",
         "summary_embedding",
     ]
-
-    cleaned = merged[keep_cols].copy()
+    raw_cols_unique = [c for c in RAW_SOURCE_COLUMNS if c not in base_cols]
+    cleaned = merged[base_cols + raw_cols_unique].copy()
     return cleaned
 
 

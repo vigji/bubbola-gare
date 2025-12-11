@@ -12,12 +12,88 @@ DATA_DIR = REPO_ROOT / "data"
 PROCESSED_DIR = DATA_DIR / "processed"
 CACHE_DIR = DATA_DIR / "cache"
 
+# Source column mapping (kept verbatim in the DB)
+RAW_SOURCE_COLUMNS = [
+    "t_acquisti_cod_acquisto",
+    "ordine_n",
+    "data_ord",
+    "tipo_approv",
+    "tipologia",
+    "tipo_contratto",
+    "tipo_contratto_txt",
+    "tipo_ordine",
+    "richiedente",
+    "esecutore",
+    "scad_off",
+    "cond_pag",
+    "condiz_pagamento",
+    "banca_appoggio",
+    "oggetto",
+    "descrizione",
+    "spedizione",
+    "data_cons",
+    "luogo_cons",
+    "resa",
+    "cons_agg",
+    "note",
+    "allegati",
+    "clausola",
+    "data_spedizione",
+    "data_invio_contratto",
+    "data_ric_cont_firmato",
+    "cod_ind",
+    "fornitore",
+    "indirizzo",
+    "comune",
+    "provincia",
+    "cap",
+    "regione",
+    "nazione",
+    "prefisso_int",
+    "prefisso_naz",
+    "tel",
+    "tel2",
+    "email",
+    "sito_web",
+    "codice_fiscale",
+    "partita_iva",
+    "partita_iva_naz",
+    "importo_ordine",
+    "cod_fatt_dati",
+    "t_acquisti_dati_cod_acquisto",
+    "posiz_num",
+    "codice",
+    "desc",
+    "um",
+    "qta",
+    "importo_unit",
+    "sconto_aumento",
+    "importo_tot",
+    "data_consegna",
+]
+RAW_DATE_COLUMNS = [
+    "data_ord",
+    "data_cons",
+    "data_spedizione",
+    "data_invio_contratto",
+    "data_ric_cont_firmato",
+    "data_consegna",
+]
+RAW_NUMERIC_COLUMNS = [
+    "importo_ordine",
+    "qta",
+    "importo_unit",
+    "importo_tot",
+]
+
 # LLM provider selection
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:latest")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+CHAT_MODEL = os.getenv("CHAT_MODEL", OPENAI_MODEL)
+MCP_HTTP_URL = os.getenv("MCP_HTTP_URL", "http://localhost:8100/mcp")
 
 # Input/output locations
 RAW_EXCEL_PATH = Path(

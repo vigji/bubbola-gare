@@ -119,17 +119,20 @@ def embed_texts(
     client: Optional[OpenAI] = None,
     log_level: int = logging.INFO,
     log_prefix: str = "[embed]",
+    embed_dim: int | None = EMBED_OUTPUT_DIM,
 ) -> np.ndarray:
     """
     Embed a list of texts using the configured embedding model.
-    Returns an array of shape (N, D) in float32.
+    Returns an array of shape (N, D) in float32. If embed_dim is set (>0),
+    the API is asked to return vectors with that dimension (no post-hoc reduction).
     """
     logger.log(
         log_level,
-        "%s starting batch with %d texts (batch_size=%d)",
+        "%s starting batch with %d texts (batch_size=%d, dim=%s)",
         log_prefix,
         len(texts),
         batch_size,
+        embed_dim if embed_dim and embed_dim > 0 else "model-default",
     )
     client = client or get_openai_client()
     tokenizer = _build_tokenizer()
@@ -163,8 +166,9 @@ def embed_texts(
     pending_indices: List[int] = []
     keys: List[str] = []
 
+    dim_tag = str(embed_dim) if embed_dim and embed_dim > 0 else "full"
     for idx, t in enumerate(clipped_texts):
-        key = hashlib.sha256(t.encode("utf-8")).hexdigest()
+        key = f"{EMBEDDING_MODEL}:{dim_tag}:{hashlib.sha256(t.encode('utf-8')).hexdigest()}"
         keys.append(key)
         if key in cache:
             embeddings[idx] = np.array(cache[key], dtype=np.float32)
@@ -178,15 +182,16 @@ def embed_texts(
             continue
         logger.log(
             log_level,
-            "%s requesting %d embeddings (offset=%d)",
+            "%s requesting %d embeddings (offset=%d, dim=%s)",
             log_prefix,
             len(batch),
             i,
+            embed_dim if embed_dim and embed_dim > 0 else "model-default",
         )
-        resp = client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=batch,
-        )
+        api_kwargs = {"model": EMBEDDING_MODEL, "input": batch}
+        if embed_dim and embed_dim > 0:
+            api_kwargs["dimensions"] = embed_dim
+        resp = client.embeddings.create(**api_kwargs)
         for local_j, d in enumerate(resp.data):
             global_idx = pending_indices[i + local_j]
             emb = np.array(d.embedding, dtype=np.float32)
@@ -202,24 +207,20 @@ def embed_texts(
 
 
 def l2_normalize(x: np.ndarray) -> np.ndarray:
-    norms = np.linalg.norm(x, axis=1, keepdims=True) + 1e-12
-    return x / norms
+    arr = np.asarray(x, dtype=np.float32)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    return arr / norms
 
 
-def _reduce_dimension(vectors: np.ndarray, target_dim: int) -> np.ndarray:
-    if target_dim <= 0:
-        return vectors
-    if vectors.shape[1] <= target_dim:
-        return vectors
-    try:
-        from sklearn.decomposition import TruncatedSVD
-
-        svd = TruncatedSVD(n_components=target_dim, random_state=42)
-        reduced = svd.fit_transform(vectors)
-        return reduced.astype(np.float32)
-    except Exception as exc:  # pragma: no cover - optional reduction path
-        warnings.warn(f"[embed] dim reduction failed ({exc}); keeping original dims")
-        return vectors
+def embed_query_vectors(texts: List[str]) -> np.ndarray:
+    """
+    Embed free-text queries so they match stored summary embeddings: API-side dimension control + L2 normalize.
+    """
+    raw = embed_texts(texts, embed_dim=EMBED_OUTPUT_DIM)
+    return l2_normalize(np.asarray(raw, dtype=np.float32))
 
 
 def compute_embeddings(df: pd.DataFrame, text_col: str = "text_normalized") -> pd.DataFrame:
@@ -228,10 +229,8 @@ def compute_embeddings(df: pd.DataFrame, text_col: str = "text_normalized") -> p
         t if isinstance(t, str) else ("" if t is None else str(t))
         for t in series.tolist()
     ]
-    emb = embed_texts(texts)
-    emb = np.asarray(emb, dtype=np.float32)
-    emb = _reduce_dimension(emb, EMBED_OUTPUT_DIM)
-    emb = l2_normalize(emb)
+    emb = embed_texts(texts, embed_dim=EMBED_OUTPUT_DIM)
+    emb = l2_normalize(np.asarray(emb, dtype=np.float32))
     out = df.copy()
     out["embedding"] = emb.tolist()
     return out

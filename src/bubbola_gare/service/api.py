@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import date
 from typing import List, Optional
 
@@ -9,9 +11,10 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from ..config import PGDATABASE, PGHOST, SQL_DEFAULT_LIMIT, SQL_MAX_LIMIT
-from ..embedding import embed_texts, l2_normalize
+from ..embedding import embed_query_vectors
 from ..preprocessing import normalize_text
 from ..summarization import SUMMARY_COLUMN
+from .chat_gateway import ChatResult, chat_gateway
 from .analytics import AnalyticsEngine, ORDERS_SCHEMA_TEXT
 from .db import connection_scope, get_pool
 
@@ -111,11 +114,34 @@ class SemanticQueryResponse(BaseModel):
     results: List[SearchHit]
 
 
+class ChatRequest(BaseModel):
+    question: str = Field(..., description="Plaintext question for the chat gateway (MCP-backed)")
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    tool_used: str
+    tool_arguments: dict
+    tool_result: dict
+    token_usage: dict
+    model: str
+
+
+class OpenAIMessage(BaseModel):
+    role: str
+    content: str
+
+
+class OpenAIChatRequest(BaseModel):
+    model: Optional[str] = None
+    messages: List[OpenAIMessage]
+    temperature: Optional[float] = 0.2
+
+
 def _query_vector(text: str) -> list[float]:
     normalized = normalize_text(text)
-    vec = embed_texts([normalized], log_prefix="[embed-query]")
-    vec = l2_normalize(vec)[0].astype(float).tolist()
-    return vec
+    vec = embed_query_vectors([normalized])[0]
+    return vec.astype(float).tolist()
 
 
 def _build_where_clause(filters: SearchFilters, params: dict) -> str:
@@ -159,6 +185,17 @@ def _startup() -> None:
 @app.on_event("shutdown")
 def _shutdown() -> None:
     get_pool().close()
+    try:
+        # Close MCP client if it was opened
+        conn = chat_gateway.mcp
+        if conn:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(conn.close())
+            else:
+                loop.run_until_complete(conn.close())
+    except Exception:
+        logger.warning("Failed to close MCP client cleanly", exc_info=True)
 
 
 @app.get("/health")
@@ -274,6 +311,42 @@ def semantic_search(payload: SemanticQueryRequest, conn: psycopg.Connection = De
         for r in results
     ]
     return SemanticQueryResponse(request=payload, results=hits)
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
+    result: ChatResult = await chat_gateway.chat(payload.question)
+    return ChatResponse(**result.to_dict())
+
+
+@app.post("/v1/chat/completions")
+async def openai_compatible_chat(payload: OpenAIChatRequest) -> dict:
+    # Use the last user message as the question
+    user_messages = [m for m in payload.messages if m.role == "user"]
+    if not user_messages:
+        raise HTTPException(status_code=400, detail="No user message found.")
+    question = user_messages[-1].content
+    result: ChatResult = await chat_gateway.chat(question)
+    created = int(time.time())
+    usage = result.token_usage or {}
+    return {
+        "id": "chatcmpl-mcp",
+        "object": "chat.completion",
+        "created": created,
+        "model": result.model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": result.answer},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        },
+    }
 
 
 if __name__ == "__main__":
