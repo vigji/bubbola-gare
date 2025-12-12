@@ -35,7 +35,9 @@ Notes:
 - Semantic (NL) analytics: `POST /analytics/semantic` similar filters as `/search`
 - Schema: `GET /analytics/schema`
 - MCP-backed chat: `POST /chat` with `{"question": "..."}` (runs MCP tool + LLM)
-- OpenAI-compatible shim: `POST /v1/chat/completions` (base URL `http://localhost:8000`, any API key)
+- OpenAI-compatible shim (base URL `http://localhost:8000/v1`, any API key):
+  - `GET /v1/models`
+  - `POST /v1/chat/completions`
 
 ### Example queries (copy/paste)
 - Vector search (BM25 + vector): `curl -X POST http://localhost:8000/search -H "Content-Type: application/json" -d '{"query":"guanti nitrile", "top_k":5, "filters":{"region":"Lombardia"}}'`
@@ -48,7 +50,26 @@ Notes:
 ## MCP Server (port 8100)
 - Endpoint: `http://localhost:8100/mcp`
 - Tools: `list_schema`, `run_sql` (read-only with enforced LIMIT/allowlist), `ask_orders` (NL→SQL), `semantic_search`, `sample_questions`
-- Connect any MCP client to that URL. In Open WebUI, add a “Custom OpenAI” provider pointing to `http://localhost:8000` (so chats route through the gateway that calls MCP).
+- Connect any MCP client to that URL.
+
+## Open WebUI / LibreChat connectivity (chat UI → gateway → MCP)
+- Treat the FastAPI gateway as an OpenAI-compatible backend with base URL `http://<gateway-host>:8000/v1` (note the trailing `/v1`).
+- The shim exposes `GET /v1/models` (lists your configured `CHAT_MODEL`) and `POST /v1/chat/completions`.
+- If you run the provided profile: `docker compose --profile ui up --build`, Open WebUI reaches the app at `http://app:8000/v1` on the compose network (already set as `OPENAI_API_BASE` in `docker-compose.yml`). In the UI, add a “Custom OpenAI” connection pointing to that URL with any API key (e.g., `dummy-key`), then hit “Test”. You should see the model list returned.
+- If you run Open WebUI in Docker while the gateway runs on the host, add `--add-host=host.docker.internal:host-gateway` to your `docker run` and set the connection URL to `http://host.docker.internal:8000/v1` with a dummy bearer key.
+- Quick connectivity check from the UI container: `docker exec -it open-webui sh -c "curl -s http://host.docker.internal:8000/v1/models"`. You should see the model list JSON; if not, it is a network/URL issue.
+- LibreChat follows the same pattern: add a “Custom OpenAI-compatible” provider with the same base URL + bearer.
+- If you see “Network Problem” in the UI:
+  - Confirm you are using the right hostname for your topology: `http://app:8000/v1` when both UI and gateway are in the same docker-compose; `http://localhost:8000/v1` if the UI is on your host hitting the published port; `http://host.docker.internal:8000/v1` if the UI is in Docker and the gateway is on the host.
+  - From inside the UI container run `curl http://app:8000/v1/models` (compose) or `curl http://host.docker.internal:8000/v1/models` (UI in Docker, gateway on host). If it returns JSON, connectivity is fine and the issue is likely the URL configured in Admin → Connections.
+  - If you enabled “Direct connection” in the connection modal (green toggle), the browser must resolve the host. In that case prefer `http://localhost:8000/v1` (published port) or `http://host.docker.internal:8000/v1`; using the internal service name `app` will fail from the browser even though it works inside the container.
+- Running Open WebUI with plain Docker against a host-running gateway:
+  1) Start the UI:\
+  `docker run -d -p 3000:8080 --name open-webui --add-host=host.docker.internal:host-gateway ghcr.io/open-webui/open-webui:main`
+  2) Open Admin → Connections → Add “Custom OpenAI” and set:\
+     URL: `http://host.docker.internal:8000/v1`\
+     API Key: `dummy-key` (or any string, we don’t enforce it)
+  3) Click Test; the model list should include your `CHAT_MODEL` (e.g., `gpt-4.1-mini`). If the test fails, run the curl check above from inside the container.
 
 ## Data Pipeline (manual, if you need to regenerate)
 ```bash

@@ -8,7 +8,8 @@ from typing import List, Optional
 
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import PGDATABASE, PGHOST, SQL_DEFAULT_LIMIT, SQL_MAX_LIMIT
 from ..embedding import embed_query_vectors
@@ -21,6 +22,13 @@ from .db import connection_scope, get_pool
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Orders similarity service (Postgres + pgvector)", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 analytics_engine = AnalyticsEngine(pool=get_pool())
 
 
@@ -136,6 +144,13 @@ class OpenAIChatRequest(BaseModel):
     model: Optional[str] = None
     messages: List[OpenAIMessage]
     temperature: Optional[float] = 0.2
+    stream: Optional[bool] = False
+    max_tokens: Optional[int] = None
+    top_p: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+
+    model_config = ConfigDict(extra="ignore")
 
 
 def _query_vector(text: str) -> list[float]:
@@ -317,6 +332,21 @@ def semantic_search(payload: SemanticQueryRequest, conn: psycopg.Connection = De
 async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     result: ChatResult = await chat_gateway.chat(payload.question)
     return ChatResponse(**result.to_dict())
+
+
+@app.get("/v1/models")
+async def openai_compatible_models() -> dict:
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": chat_gateway.model,
+                "object": "model",
+                "created": 0,
+                "owned_by": "local-gateway",
+            }
+        ],
+    }
 
 
 @app.post("/v1/chat/completions")
