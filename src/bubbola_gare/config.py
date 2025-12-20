@@ -97,7 +97,7 @@ MCP_HTTP_URL = os.getenv("MCP_HTTP_URL", "http://localhost:8100/mcp")
 
 # Input/output locations
 RAW_EXCEL_PATH = Path(
-    os.getenv("RAW_EXCEL_PATH", DATA_DIR / "gesa_dump.xlsx")
+    os.getenv("RAW_EXCEL_PATH", DATA_DIR / "gesa_dump_gare.xlsx")
 )
 RAW_PARQUET_PATH = Path(
     os.getenv("RAW_PARQUET_PATH", PROCESSED_DIR / "orders_raw.parquet")
