@@ -40,6 +40,11 @@ def build_server(host: str = "0.0.0.0", port: int = 8100) -> FastMCP:
     )
     server = FastMCP(name="orders-mcp", instructions=instructions, host=host, port=port, log_level="INFO")
 
+    def _ensure_table(sql: str, expected_table: str) -> None:
+        lowered = sql.lower()
+        if expected_table not in lowered:
+            raise ValueError(f"Query must target the `{expected_table}` table.")
+
     @server.tool(name="list_schema", description="Show available columns and descriptions for orders and commesse tables.")
     def list_schema() -> dict[str, Any]:
         return {
@@ -47,11 +52,43 @@ def build_server(host: str = "0.0.0.0", port: int = 8100) -> FastMCP:
             "columns": {"orders": ORDERS_COLUMNS, "commesse": COMMESSE_COLUMNS},
         }
 
+    @server.tool(name="list_schema_orders", description="Show columns for the orders table.")
+    def list_schema_orders() -> dict[str, Any]:
+        return {
+            "schema": ORDERS_SCHEMA_TEXT,
+            "columns": {"orders": ORDERS_COLUMNS},
+        }
+
+    @server.tool(name="list_schema_commesse", description="Show columns for the commesse table.")
+    def list_schema_commesse() -> dict[str, Any]:
+        return {
+            "schema": COMMESSE_SCHEMA_TEXT,
+            "columns": {"commesse": COMMESSE_COLUMNS},
+        }
+
     @server.tool(
         name="run_sql",
         description="Execute a read-only SQL query against the orders or commesse tables. LIMIT is enforced server-side.",
     )
     def run_sql(sql: str, max_rows: int = SQL_DEFAULT_LIMIT) -> dict[str, Any]:
+        result = engine.run_sql(sql, limit=max_rows)
+        return result.to_dict()
+
+    @server.tool(
+        name="run_sql_orders",
+        description="Execute a read-only SQL query against the orders table. LIMIT is enforced server-side.",
+    )
+    def run_sql_orders(sql: str, max_rows: int = SQL_DEFAULT_LIMIT) -> dict[str, Any]:
+        _ensure_table(sql, "orders")
+        result = engine.run_sql(sql, limit=max_rows)
+        return result.to_dict()
+
+    @server.tool(
+        name="run_sql_commesse",
+        description="Execute a read-only SQL query against the commesse table. LIMIT is enforced server-side.",
+    )
+    def run_sql_commesse(sql: str, max_rows: int = SQL_DEFAULT_LIMIT) -> dict[str, Any]:
+        _ensure_table(sql, "commesse")
         result = engine.run_sql(sql, limit=max_rows)
         return result.to_dict()
 

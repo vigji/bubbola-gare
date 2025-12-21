@@ -125,6 +125,8 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CHAT_MODEL = os.getenv("CHAT_MODEL", OPENAI_MODEL)
 MCP_HTTP_URL = os.getenv("MCP_HTTP_URL", "http://localhost:8100/mcp")
+MCP_HTTP_URL_ORDERS = os.getenv("MCP_HTTP_URL_ORDERS", MCP_HTTP_URL)
+MCP_HTTP_URL_COMMESSE = os.getenv("MCP_HTTP_URL_COMMESSE", MCP_HTTP_URL)
 
 # Input/output locations
 RAW_EXCEL_PATH = Path(

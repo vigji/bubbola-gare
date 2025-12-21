@@ -15,7 +15,7 @@ from ..config import PGDATABASE, PGHOST, SQL_DEFAULT_LIMIT, SQL_MAX_LIMIT
 from ..embedding import embed_query_vectors
 from ..preprocessing import normalize_text
 from ..summarization import SUMMARY_COLUMN
-from .chat_gateway import ChatResult, chat_gateway
+from .chat_gateway import ChatResult, chat_gateway_commesse, chat_gateway_orders
 from .analytics import AnalyticsEngine, ORDERS_SCHEMA_TEXT, COMMESSE_SCHEMA_TEXT, COMMESSE_COLUMNS, ORDERS_COLUMNS
 from .db import connection_scope, get_pool
 
@@ -200,17 +200,15 @@ def _startup() -> None:
 @app.on_event("shutdown")
 def _shutdown() -> None:
     get_pool().close()
-    try:
-        # Close MCP client if it was opened
-        conn = chat_gateway.mcp
-        if conn:
+    for conn in (chat_gateway_orders.mcp, chat_gateway_commesse.mcp):
+        try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 loop.create_task(conn.close())
             else:
                 loop.run_until_complete(conn.close())
-    except Exception:
-        logger.warning("Failed to close MCP client cleanly", exc_info=True)
+        except Exception:
+            logger.warning("Failed to close MCP client cleanly", exc_info=True)
 
 
 @app.get("/health")
@@ -331,10 +329,21 @@ def semantic_search(payload: SemanticQueryRequest, conn: psycopg.Connection = De
     return SemanticQueryResponse(request=payload, results=hits)
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
-    result: ChatResult = await chat_gateway.chat(payload.question)
+@app.post("/chat/orders", response_model=ChatResponse)
+async def chat_orders_endpoint(payload: ChatRequest) -> ChatResponse:
+    result: ChatResult = await chat_gateway_orders.chat(payload.question)
     return ChatResponse(**result.to_dict())
+
+
+@app.post("/chat/commesse", response_model=ChatResponse)
+async def chat_commesse_endpoint(payload: ChatRequest) -> ChatResponse:
+    result: ChatResult = await chat_gateway_commesse.chat(payload.question)
+    return ChatResponse(**result.to_dict())
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(_: ChatRequest) -> ChatResponse:
+    raise HTTPException(status_code=400, detail="Choose a dataset: POST /chat/orders or /chat/commesse")
 
 
 @app.get("/v1/models")
@@ -343,7 +352,7 @@ async def openai_compatible_models() -> dict:
         "object": "list",
         "data": [
             {
-                "id": chat_gateway.model,
+                "id": chat_gateway_orders.model,
                 "object": "model",
                 "created": 0,
                 "owned_by": "local-gateway",
@@ -359,7 +368,7 @@ async def openai_compatible_chat(payload: OpenAIChatRequest) -> dict:
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message found.")
     question = user_messages[-1].content
-    result: ChatResult = await chat_gateway.chat(question)
+    result: ChatResult = await chat_gateway_orders.chat(question)
     created = int(time.time())
     usage = result.token_usage or {}
     return {

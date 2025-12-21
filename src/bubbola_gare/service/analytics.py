@@ -8,6 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Tuple
 
+import numpy as np
 import psycopg
 from openai import OpenAI
 from psycopg.rows import dict_row
@@ -131,6 +132,8 @@ def _serialize_value(val: Any) -> Any:
         return float(val)
     if isinstance(val, (datetime, date)):
         return val.isoformat()
+    if isinstance(val, np.ndarray):
+        return val.tolist()
     return val
 
 

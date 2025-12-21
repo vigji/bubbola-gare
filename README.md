@@ -34,17 +34,20 @@ Notes:
 - NL-to-SQL: `POST /analytics/nlq` with `{"question": "..."}`
 - Semantic (NL) analytics: `POST /analytics/semantic` similar filters as `/search`
 - Schema: `GET /analytics/schema`
-- MCP-backed chat: `POST /chat` with `{"question": "..."}` (runs MCP tool + LLM)
+- MCP-backed chat (dataset-scoped):
+  - Orders: `POST /chat/orders` with `{"question": "..."}` → routes to orders tools only
+  - Commesse: `POST /chat/commesse` with `{"question": "..."}` → routes to commesse tools only
 - OpenAI-compatible shim (base URL `http://localhost:8000/v1`, any API key):
   - `GET /v1/models`
-  - `POST /v1/chat/completions`
+  - `POST /v1/chat/completions` (orders dataset default)
 
 ### Example queries (copy/paste)
 - Vector search (BM25 + vector): `curl -X POST http://localhost:8000/search -H "Content-Type: application/json" -d '{"query":"guanti nitrile", "top_k":5, "filters":{"region":"Lombardia"}}'`
 - Read-only SQL: `curl -X POST http://localhost:8000/analytics/sql -H "Content-Type: application/json" -d '{"sql":"SELECT vendor, SUM(amount) AS total FROM orders WHERE order_date >= ''2024-01-01'' GROUP BY vendor ORDER BY total DESC LIMIT 5"}'`
 - NL → SQL analytics: `curl -X POST http://localhost:8000/analytics/nlq -H "Content-Type: application/json" -d '{"question":"Top 5 fornitori per importo nel 2024"}'`
 - Semantic filters (structured): `curl -X POST http://localhost:8000/analytics/semantic -H "Content-Type: application/json" -d '{"query":"calcestruzzo per fondamenta", "top_k":5, "filters":{"region":"Lazio","min_amount":5000}}'`
-- Chat (MCP-backed auto-tooling): `curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"question":"Fornitore dal quale abbiamo piazzato più ordini singoli?"}'`
+- Chat ordini: `curl -X POST http://localhost:8000/chat/orders -H "Content-Type: application/json" -d '{"question":"Fornitore dal quale abbiamo piazzato più ordini singoli?"}'`
+- Chat commesse: `curl -X POST http://localhost:8000/chat/commesse -H "Content-Type: application/json" -d '{"question":"Elenca commesse con committente SNAM"}'`
 - OpenAI shim: `curl -X POST http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer dummy" -d '{"model":"gpt-4.1-mini","messages":[{"role":"user","content":"Dammi la spesa totale per il 2024"}]}'`
 
 ## MCP Server (port 8100)
@@ -107,11 +110,11 @@ All source columns are also present (as text/typed where applicable):
 ## Config (.env keys)
 - `OPENAI_API_KEY` (or set `LLM_PROVIDER=ollama`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`)
 - `OPENAI_MODEL`, `SQL_GENERATION_MODEL`, `CHAT_MODEL`, `EMBEDDING_MODEL`
-- `MCP_HTTP_URL` (default `http://mcp:8100/mcp` in compose)
+- `MCP_HTTP_URL` (default `http://mcp:8100/mcp` in compose), `MCP_HTTP_URL_ORDERS`, `MCP_HTTP_URL_COMMESSE`
 - Postgres: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`
 - Embedding/search knobs: `EMBED_OUTPUT_DIM`, `DEFAULT_TOP_K`, `DEFAULT_ALPHA`
 
 ## Troubleshooting
 - Loader OOM/slow? It now streams inserts in batches; ensure `orders_db_ready.parquet` exists and run `docker compose up --build` again.
-- MCP not reachable? Confirm `bubbola-gare-mcp-1` is running and `MCP_HTTP_URL` points to `http://localhost:8100/mcp` when hitting from host.
+- MCP not reachable? Confirm `bubbola-gare-mcp-1` is running and `MCP_HTTP_URL`/`MCP_HTTP_URL_ORDERS`/`MCP_HTTP_URL_COMMESSE` point to `http://localhost:8100/mcp` when hitting from host.
 - UI: only starts with `--profile ui`; otherwise the core stack (db + loader + app + MCP) is always included.
