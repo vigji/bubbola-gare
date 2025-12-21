@@ -86,6 +86,37 @@ RAW_NUMERIC_COLUMNS = [
     "importo_tot",
 ]
 
+# Commesse (projects) source columns mapping
+COMMESSE_RENAME_MAP = {
+    "Ditta": "ditta",
+    "num commessa": "num_commessa",
+    "nome commessa": "nome_commessa",
+    "Settore": "settore",
+    "MGO": "mgo",
+    "committente": "committente",
+    "ente appaltante": "ente_appaltante",
+    "oggetto": "oggetto",
+    "importo": "importo",
+    "consegna": "consegna",
+    "ultimazione": "ultimazione",
+    "codice gara": "codice_gara",
+    "responsabile commessa": "responsabile_commessa",
+    "responsabile cantiere": "responsabile_cantiere",
+    "preposti": "preposti",
+}
+COMMESSE_SOURCE_COLUMNS = list(COMMESSE_RENAME_MAP.values())
+COMMESSE_DATE_COLUMNS = ["consegna", "ultimazione"]
+COMMESSE_NUMERIC_COLUMNS = ["importo"]
+COMMESSE_TEXT_COLUMNS = [
+    c.strip()
+    for c in os.getenv(
+        "COMMESSE_TEXT_COLUMNS", "oggetto_filled"
+    ).split(",")
+    if c.strip()
+]
+COMMESSE_ID_COLUMN = os.getenv("COMMESSE_ID_COLUMN", "num_commessa")
+COMMESSE_CLIENT_COLUMN = os.getenv("COMMESSE_CLIENT_COLUMN", "committente")
+
 # LLM provider selection
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -116,6 +147,21 @@ DB_READY_PATH = Path(
 )
 EMBED_CACHE_PATH = Path(
     os.getenv("EMBED_CACHE_PATH", CACHE_DIR / "embedding_cache.pkl")
+)
+COMMESSE_RAW_EXCEL_PATH = Path(
+    os.getenv("COMMESSE_RAW_EXCEL_PATH", DATA_DIR / "gesa_dump_commesse.xlsx")
+)
+COMMESSE_RAW_PARQUET_PATH = Path(
+    os.getenv("COMMESSE_RAW_PARQUET_PATH", PROCESSED_DIR / "commesse_raw.parquet")
+)
+COMMESSE_PREPROCESSED_PATH = Path(
+    os.getenv("COMMESSE_PREPROCESSED_PATH", PROCESSED_DIR / "commesse_preprocessed.parquet")
+)
+COMMESSE_EMBEDDINGS_PATH = Path(
+    os.getenv("COMMESSE_EMBEDDINGS_PATH", PROCESSED_DIR / "commesse_embeddings.parquet")
+)
+COMMESSE_DB_READY_PATH = Path(
+    os.getenv("COMMESSE_DB_READY_PATH", PROCESSED_DIR / "commesse_db_ready.parquet")
 )
 
 # Text configuration

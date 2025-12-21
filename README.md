@@ -81,6 +81,19 @@ uv run python -m bubbola_gare.db_loader --truncate     # Load Postgres (table re
 ```
 `docker compose up --build` already runs the loader against `orders_db_ready.parquet`.
 
+### Commesse (projects) pipeline
+- Source file: `data/gesa_dump_commesse.xlsx` (columns like `num commessa`, `nome commessa`, `Settore`, `committente`, `oggetto`, `importo`, dates, etc.).
+- Preprocessing fills missing `oggetto` with `nome_commessa + settore + committente`, normalizes text, and keeps all source columns.
+- Commands:
+  ```bash
+  uv run python -m bubbola_gare.pipeline commesse-ingest         # Excel -> data/processed/commesse_raw.parquet
+  uv run python -m bubbola_gare.pipeline commesse-preprocess     # Fill oggetto/text -> data/processed/commesse_preprocessed.parquet
+  uv run python -m bubbola_gare.pipeline commesse-embed          # Embed oggetto_filled -> data/processed/commesse_embeddings.parquet
+  uv run python -m bubbola_gare.pipeline commesse-db-ready       # Rename embedding -> data/processed/commesse_db_ready.parquet
+  uv run python -m bubbola_gare.db_loader --commesse-path data/processed/commesse_db_ready.parquet --truncate-commesse
+  ```
+- The loader creates a `commesse` table with the original columns, the filled `oggetto_filled`, normalized text, and an `oggetto_embedding` vector for semantic search/filtering.
+
 ## Table Schema Highlights
 Derived/analysis fields:
 - `record_id` (PK), `order_code` (from `ordine_n`), `order_date`, `delivery_date`

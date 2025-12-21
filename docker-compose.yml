@@ -18,7 +18,18 @@ services:
 
   loader:
     build: .
-    command: ["python", "-m", "bubbola_gare.db_loader", "--path", "/app/data/processed/orders_db_ready.parquet", "--truncate"]
+    command:
+      [
+        "python",
+        "-m",
+        "bubbola_gare.db_loader",
+        "--path",
+        "/app/data/processed/orders_db_ready.parquet",
+        "--truncate",
+        "--commesse-path",
+        "/app/data/processed/commesse_db_ready.parquet",
+        "--truncate-commesse",
+      ]
     restart: "no"
     environment:
       PGHOST: db

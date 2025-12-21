@@ -85,13 +85,6 @@ def _safe_token_usage(usage) -> dict[str, Optional[int]]:
     }
 
 
-def _choose_tool_fallback(question: str) -> tuple[str, dict[str, Any]]:
-    q = question.lower()
-    if "similar" in q or "like" in q:
-        return "semantic_search", {"query_text": question, "top_k": 5}
-    return "ask_orders", {"question": question, "max_rows": 100}
-
-
 def _looks_like_sql(text: str) -> bool:
     lowered = text.lower()
     return ("select" in lowered and "from" in lowered) or "with " in lowered or ";" in lowered
@@ -143,33 +136,31 @@ class ChatGateway:
         system = (
             "You route user questions to MCP tools. Return a JSON object with keys "
             "`tool` and `arguments`. Allowed tools:\n"
-            "- ask_orders: for general analytics/NLQ over orders (expects `question`, optional `max_rows`).\n"
-            "- semantic_search: for similarity searches (expects `query_text` or `order_code`, optional filters like `region`, `vendor`, etc., and `top_k`).\n"
-            "- run_sql: when user provides explicit SQL (expects `sql`).\n"
-            "- list_schema: when user asks about available columns."
+            "- ask_orders: NL/analytics for the procurement orders table; use when the intent mentions orders/ordine/importo ordine or is ambiguous.\n"
+            "- ask_commesse: NL/analytics for the commesse/projects table; use when the intent is clearly about commesse/commessa history.\n"
+            "- semantic_search: similarity over orders (text or order_code with optional filters like region/vendor/etc.).\n"
+            "- semantic_search_commesse: similarity over commesse (text or commessa_code with filters like committente/settore/responsabili/date/importo).\n"
+            "- run_sql: when the user provides explicit SQL.\n"
+            "- list_schema: when the user asks about tables/columns/schema.\n"
+            "Routing hints (soft): if the question mentions commessa/commesse, consider ask_commesse; if it mentions ordine/importo ordine/order code, consider ask_orders; use semantic_search only when the user explicitly asks for \"simile\"/\"similar\"/\"like\" or free-text similarity."
         )
         user = f"Question: {question}\nRespond ONLY with JSON."
-        try:
-            resp = await asyncio.to_thread(
-                self.client.chat.completions.create,
-                model=self.model,
-                temperature=0,
-                response_format={"type": "json_object"},
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            )
-            content = resp.choices[0].message.content or "{}"
-            parsed = json.loads(content)
-            tool = str(parsed.get("tool", "")).strip()
-            arguments = parsed.get("arguments") or {}
-            if tool not in {"ask_orders", "semantic_search", "run_sql", "list_schema"}:
-                return _choose_tool_fallback(question)
-            # If the model picked SQL without the user providing SQL, route to NLQ instead.
-            if tool == "run_sql" and not _looks_like_sql(question):
-                return "ask_orders", {"question": question, "max_rows": arguments.get("max_rows", SQL_DEFAULT_LIMIT)}
-            return tool, arguments
-        except Exception as exc:
-            logger.warning("Tool planning failed; using fallback (%s)", exc)
-            return _choose_tool_fallback(question)
+        resp = await asyncio.to_thread(
+            self.client.chat.completions.create,
+            model=self.model,
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        )
+        content = resp.choices[0].message.content or "{}"
+        parsed = json.loads(content)
+        tool = str(parsed.get("tool", "")).strip()
+        arguments = parsed.get("arguments") or {}
+        if tool not in {"ask_orders", "ask_commesse", "semantic_search", "semantic_search_commesse", "run_sql", "list_schema"}:
+            raise ValueError(f"Unsupported tool selection: {tool}")
+        if tool == "run_sql" and not _looks_like_sql(question):
+            raise ValueError("Planner selected run_sql but input does not look like SQL.")
+        return tool, arguments
 
     async def _call_mcp(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = await self.mcp.call_tool(tool, arguments)
@@ -182,9 +173,19 @@ class ChatGateway:
         tool_args: dict[str, Any],
         tool_result: dict[str, Any],
     ) -> tuple[str, dict[str, Optional[int]]]:
+        if tool == "list_schema":
+            columns = tool_result.get("columns", {})
+            tables: list[str] = list(columns.keys()) if isinstance(columns, dict) else []
+            if not tables:
+                schema_txt = str(tool_result.get("schema", ""))
+                tables = [line.split(":")[1].strip() for line in schema_txt.splitlines() if line.lower().startswith("table:")]
+            tables_clean = ", ".join(tables) if tables else "nessuna tabella trovata"
+            answer = f"Tabelle disponibili: {tables_clean}."
+            return answer, {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None}
         system = (
-            "You are an assistant answering questions over an orders database using MCP tool outputs. "
+            "You are an assistant answering questions over orders and commesse data using MCP tool outputs. "
             "Use the provided results to answer concisely. "
+            "If the tool is list_schema, explicitly name the available tables before mentioning columns. "
             "If no data is available, say so. Include the SQL or search intent briefly when helpful."
         )
         tool_summary = _truncate_for_prompt({"tool": tool, "arguments": tool_args, "result": tool_result})
@@ -210,9 +211,8 @@ class ChatGateway:
         schema_text = schema.get("schema") or ""
         columns = schema.get("columns") or []
         system = (
-            "You fix broken SQL for a single table `orders`. Only use SELECT/CTE, never modify data. "
-            f"Use the provided schema and keep LIMIT <= {SQL_DEFAULT_LIMIT}. Respond with JSON containing `sql` "
-            "and optional `rationale`."
+            "You fix broken SQL for the available tables (`orders`, `commesse`). Only use SELECT/CTE, never modify data. "
+            f"Use the provided schema and keep LIMIT <= {SQL_DEFAULT_LIMIT}. Respond with JSON containing `sql` and optional `rationale`."
         )
         user = (
             f"Question: {question}\n"
@@ -270,8 +270,32 @@ class ChatGateway:
         return "run_sql", retry_args, combined_result
 
     async def chat(self, question: str) -> ChatResult:
-        tool, tool_args = await self._plan_tool(question)
-        tool_result = await self._call_mcp(tool, tool_args)
+        try:
+            tool, tool_args = await self._plan_tool(question)
+        except Exception as exc:
+            err_msg = f"Tool planning failed: {exc}"
+            logger.error(err_msg)
+            return ChatResult(
+                answer=err_msg,
+                tool_used="planning_error",
+                tool_arguments={},
+                tool_result={"error": err_msg},
+                token_usage={"prompt_tokens": None, "completion_tokens": None, "total_tokens": None},
+                model=self.model,
+            )
+        try:
+            tool_result = await self._call_mcp(tool, tool_args)
+        except (Exception, BaseExceptionGroup) as exc:
+            err_msg = f"MCP call failed for '{tool}' (url={self.mcp.url}): {exc}"
+            logger.error(err_msg, exc_info=True)
+            return ChatResult(
+                answer=err_msg,
+                tool_used=tool,
+                tool_arguments=tool_args,
+                tool_result={"error": err_msg},
+                token_usage={"prompt_tokens": None, "completion_tokens": None, "total_tokens": None},
+                model=self.model,
+            )
         tool, tool_args, tool_result = await self._retry_on_error(question, tool, tool_args, tool_result)
         answer, usage = await self._compose_answer(question, tool, tool_args, tool_result)
         if usage.get("total_tokens") is not None:

@@ -16,7 +16,7 @@ from ..embedding import embed_query_vectors
 from ..preprocessing import normalize_text
 from ..summarization import SUMMARY_COLUMN
 from .chat_gateway import ChatResult, chat_gateway
-from .analytics import AnalyticsEngine, ORDERS_SCHEMA_TEXT
+from .analytics import AnalyticsEngine, ORDERS_SCHEMA_TEXT, COMMESSE_SCHEMA_TEXT, COMMESSE_COLUMNS, ORDERS_COLUMNS
 from .db import connection_scope, get_pool
 
 logger = logging.getLogger(__name__)
@@ -259,9 +259,12 @@ def search_orders(payload: SearchRequest, conn: psycopg.Connection = Depends(_ge
 
 @app.get("/analytics/schema", response_model=SchemaResponse)
 def get_schema() -> SchemaResponse:
-    from .analytics import ORDERS_COLUMNS
-
-    return SchemaResponse(schema=ORDERS_SCHEMA_TEXT, columns=list(ORDERS_COLUMNS.keys()))
+    combined_schema = ORDERS_SCHEMA_TEXT + "\n\n" + COMMESSE_SCHEMA_TEXT
+    combined_cols: list[str] = []
+    for col in list(ORDERS_COLUMNS.keys()) + list(COMMESSE_COLUMNS.keys()):
+        if col not in combined_cols:
+            combined_cols.append(col)
+    return SchemaResponse(schema=combined_schema, columns=combined_cols)
 
 
 @app.post("/analytics/sql", response_model=SqlQueryResponse)

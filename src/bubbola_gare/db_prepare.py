@@ -10,6 +10,12 @@ import numpy as np
 import pandas as pd
 
 from .config import (
+    COMMESSE_DB_READY_PATH,
+    COMMESSE_EMBEDDINGS_PATH,
+    COMMESSE_NUMERIC_COLUMNS,
+    COMMESSE_DATE_COLUMNS,
+    COMMESSE_PREPROCESSED_PATH,
+    COMMESSE_SOURCE_COLUMNS,
     DB_READY_PATH,
     ID_COLUMN,
     RAW_DATE_COLUMNS,
@@ -171,6 +177,65 @@ def build_db_ready_dataframe(
     return cleaned
 
 
+def build_commesse_db_ready_dataframe(
+    preprocessed_path: str | Path = COMMESSE_PREPROCESSED_PATH,
+    embeddings_path: str | Path = COMMESSE_EMBEDDINGS_PATH,
+    drop_missing_vectors: bool = True,
+) -> pd.DataFrame:
+    df = pd.read_parquet(preprocessed_path)
+    for col in COMMESSE_SOURCE_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    for col in COMMESSE_DATE_COLUMNS:
+        df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+    for col in COMMESSE_NUMERIC_COLUMNS:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    embeddings = pd.read_parquet(embeddings_path)
+    embeddings = embeddings[["record_id", "embedding"]].rename(columns={"embedding": "oggetto_embedding"})
+
+    merged = df.merge(embeddings, on="record_id", how="left")
+    before = len(merged)
+    if drop_missing_vectors:
+        merged = merged[merged["oggetto_embedding"].notnull()].copy()
+    dropped = before - len(merged)
+    if dropped:
+        logger.info("Dropped %d commesse rows without embeddings", dropped)
+
+    base_cols = [
+        "record_id",
+        "commessa_code",
+        "ditta",
+        "nome_commessa",
+        "settore",
+        "mgo",
+        "committente",
+        "ente_appaltante",
+        "oggetto",
+        "oggetto_filled",
+        "importo",
+        "consegna",
+        "ultimazione",
+        "codice_gara",
+        "responsabile_commessa",
+        "responsabile_cantiere",
+        "preposti",
+        "text_raw",
+        "text_normalized",
+        "oggetto_embedding",
+    ]
+    ordered: list[str] = []
+    seen = set()
+    for col in base_cols + [c for c in COMMESSE_SOURCE_COLUMNS if c not in base_cols]:
+        if col in seen:
+            continue
+        seen.add(col)
+        ordered.append(col)
+    if "cliente" in merged.columns and "cliente" not in seen:
+        ordered.insert(ordered.index("committente") + 1 if "committente" in ordered else len(ordered), "cliente")
+    return merged[[c for c in ordered if c in merged.columns]].copy()
+
+
 def write_db_ready_parquet(
     dest_path: str | Path = DB_READY_PATH,
     raw_path: str | Path = RAW_PARQUET_PATH,
@@ -186,6 +251,22 @@ def write_db_ready_parquet(
     dest.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(dest, index=False)
     logger.info("Saved cleaned dataset with %d rows to %s", len(df), dest)
+    return df
+
+
+def write_commesse_db_ready_parquet(
+    dest_path: str | Path = COMMESSE_DB_READY_PATH,
+    preprocessed_path: str | Path = COMMESSE_PREPROCESSED_PATH,
+    embeddings_path: str | Path = COMMESSE_EMBEDDINGS_PATH,
+) -> pd.DataFrame:
+    df = build_commesse_db_ready_dataframe(
+        preprocessed_path=preprocessed_path,
+        embeddings_path=embeddings_path,
+    )
+    dest = Path(dest_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(dest, index=False)
+    logger.info("Saved commesse dataset with %d rows to %s", len(df), dest)
     return df
 
 

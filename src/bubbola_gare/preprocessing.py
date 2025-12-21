@@ -7,7 +7,18 @@ from typing import Iterable, List
 
 import pandas as pd
 
-from .config import ID_COLUMN, TEXT_COLUMNS, VENDOR_COLUMN
+from .config import (
+    COMMESSE_CLIENT_COLUMN,
+    COMMESSE_DATE_COLUMNS,
+    COMMESSE_ID_COLUMN,
+    COMMESSE_NUMERIC_COLUMNS,
+    COMMESSE_RENAME_MAP,
+    COMMESSE_SOURCE_COLUMNS,
+    COMMESSE_TEXT_COLUMNS,
+    ID_COLUMN,
+    TEXT_COLUMNS,
+    VENDOR_COLUMN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,3 +119,81 @@ def preprocess_orders(df: pd.DataFrame) -> pd.DataFrame:
     return processed[
         ["record_id", "source_row", "order_id", "vendor", "text_raw", "text_normalized"]
     ]
+
+
+def _clean_commessa_value(val: object) -> str:
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except Exception:
+        pass
+    if isinstance(val, str):
+        return normalize_whitespace(val)
+    return normalize_whitespace(str(val))
+
+
+def _build_commessa_oggetto(row: pd.Series) -> str:
+    """
+    Prefer the explicit oggetto; if empty, fall back to a concise concatenation of
+    nome_commessa + settore + committente.
+    """
+    raw = _clean_commessa_value(row.get("oggetto"))
+    if raw:
+        return raw
+    fallback_parts = [
+        _clean_commessa_value(row.get("nome_commessa")),
+        _clean_commessa_value(row.get("settore")),
+        _clean_commessa_value(row.get("committente")),
+    ]
+    parts = [p for p in fallback_parts if p]
+    return normalize_whitespace(" - ".join(parts))
+
+
+def preprocess_commesse(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize and prepare commesse rows for embedding: clean strings, fill oggetto,
+    attach identifiers, and build normalized text fields.
+    """
+    work = df.rename(columns=COMMESSE_RENAME_MAP).copy()
+    for col in COMMESSE_SOURCE_COLUMNS:
+        if col not in work.columns:
+            work[col] = None
+
+    work["record_id"] = work.index.astype("int64")
+    if COMMESSE_ID_COLUMN in work.columns:
+        work["commessa_code"] = work[COMMESSE_ID_COLUMN].apply(_clean_commessa_value)
+    else:
+        work["commessa_code"] = work["record_id"].astype(str)
+
+    for col in COMMESSE_NUMERIC_COLUMNS:
+        work[col] = pd.to_numeric(work.get(col), errors="coerce")
+    for col in COMMESSE_DATE_COLUMNS:
+        work[col] = pd.to_datetime(work.get(col), errors="coerce").dt.date
+    for col in COMMESSE_SOURCE_COLUMNS:
+        if col in COMMESSE_NUMERIC_COLUMNS or col in COMMESSE_DATE_COLUMNS:
+            continue
+        work[col] = work[col].apply(_clean_commessa_value)
+
+    work["oggetto_filled"] = work.apply(_build_commessa_oggetto, axis=1)
+    text_cols = list(dict.fromkeys(COMMESSE_TEXT_COLUMNS + ["oggetto_filled"]))
+    work["text_raw"] = combine_text_fields(work, text_cols)
+    work["text_normalized"] = work["text_raw"].apply(normalize_text)
+    work["cliente"] = work.get(COMMESSE_CLIENT_COLUMN, "")
+
+    processed = work[work["text_normalized"].str.len() > 0].copy()
+    dropped = len(work) - len(processed)
+    if dropped:
+        logger.info("Dropped %d commessa rows without usable text", dropped)
+
+    cols = [
+        "record_id",
+        "commessa_code",
+        "text_raw",
+        "text_normalized",
+        "oggetto_filled",
+        "cliente",
+        *COMMESSE_SOURCE_COLUMNS,
+    ]
+    return processed[cols]

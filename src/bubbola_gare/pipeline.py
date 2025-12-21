@@ -7,6 +7,11 @@ from pathlib import Path
 import pandas as pd
 
 from .config import (
+    COMMESSE_DB_READY_PATH,
+    COMMESSE_EMBEDDINGS_PATH,
+    COMMESSE_PREPROCESSED_PATH,
+    COMMESSE_RAW_EXCEL_PATH,
+    COMMESSE_RAW_PARQUET_PATH,
     PREPROCESSED_PATH,
     RAW_EXCEL_PATH,
     RAW_PARQUET_PATH,
@@ -15,8 +20,9 @@ from .config import (
     ensure_data_dirs,
 )
 from .data_io import ingest_excel_to_parquet, load_parquet, save_parquet
+from .db_prepare import write_commesse_db_ready_parquet
 from .embedding import compute_embeddings
-from .preprocessing import preprocess_orders
+from .preprocessing import preprocess_commesse, preprocess_orders
 from .summarization import summarize_orders, SUMMARY_COLUMN
 from .search import HybridIndex, load_index_from_parquet
 
@@ -98,6 +104,56 @@ def run_search(
         logger.info("    %s", r.get("text"))
 
 
+def run_commesse_ingest(source: Path = COMMESSE_RAW_EXCEL_PATH, dest: Path = COMMESSE_RAW_PARQUET_PATH) -> pd.DataFrame:
+    logger.info("Ingesting commesse Excel %s -> %s", source, dest)
+    ensure_data_dirs()
+    df = ingest_excel_to_parquet(source, dest)
+    logger.info("Saved raw commesse table with %d rows and %d columns", len(df), len(df.columns))
+    return df
+
+
+def run_commesse_preprocess(
+    source: Path = COMMESSE_RAW_PARQUET_PATH, dest: Path = COMMESSE_PREPROCESSED_PATH
+) -> pd.DataFrame:
+    logger.info("Preprocessing commesse %s -> %s", source, dest)
+    ensure_data_dirs()
+    df_raw = load_parquet(source)
+    processed = preprocess_commesse(df_raw)
+    save_parquet(processed, dest)
+    logger.info(
+        "Saved preprocessed commesse corpus with %d rows (from %d)",
+        len(processed),
+        len(df_raw),
+    )
+    return processed
+
+
+def run_commesse_embed(
+    source: Path = COMMESSE_PREPROCESSED_PATH, dest: Path = COMMESSE_EMBEDDINGS_PATH
+) -> pd.DataFrame:
+    logger.info("Computing embeddings for commesse %s -> %s", source, dest)
+    ensure_data_dirs()
+    df_pre = load_parquet(source)
+    df_emb = compute_embeddings(df_pre, text_col="text_normalized")
+    save_parquet(df_emb, dest)
+    logger.info("Saved commesse embeddings for %d rows", len(df_emb))
+    return df_emb
+
+
+def run_commesse_db_ready(
+    preprocessed: Path = COMMESSE_PREPROCESSED_PATH,
+    embeddings: Path = COMMESSE_EMBEDDINGS_PATH,
+    dest: Path = COMMESSE_DB_READY_PATH,
+) -> pd.DataFrame:
+    logger.info("Assembling DB-ready commesse %s + %s -> %s", preprocessed, embeddings, dest)
+    ensure_data_dirs()
+    return write_commesse_db_ready_parquet(
+        dest_path=dest,
+        preprocessed_path=preprocessed,
+        embeddings_path=embeddings,
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Data pipeline for order search.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -120,6 +176,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--alpha", type=float, default=0.4)
     p_search.add_argument("--embeddings", type=Path, default=SUMMARY_EMBEDDINGS_PATH)
 
+    p_c_ingest = sub.add_parser("commesse-ingest", help="Load commesse Excel and export raw parquet")
+    p_c_ingest.add_argument("--source", type=Path, default=COMMESSE_RAW_EXCEL_PATH)
+    p_c_ingest.add_argument("--dest", type=Path, default=COMMESSE_RAW_PARQUET_PATH)
+
+    p_c_pre = sub.add_parser("commesse-preprocess", help="Preprocess commesse and export parquet")
+    p_c_pre.add_argument("--source", type=Path, default=COMMESSE_RAW_PARQUET_PATH)
+    p_c_pre.add_argument("--dest", type=Path, default=COMMESSE_PREPROCESSED_PATH)
+
+    p_c_emb = sub.add_parser("commesse-embed", help="Embed commesse oggetto text and export parquet")
+    p_c_emb.add_argument("--source", type=Path, default=COMMESSE_PREPROCESSED_PATH)
+    p_c_emb.add_argument("--dest", type=Path, default=COMMESSE_EMBEDDINGS_PATH)
+
+    p_c_db = sub.add_parser("commesse-db-ready", help="Assemble DB-ready commesse parquet (with embeddings)")
+    p_c_db.add_argument("--preprocessed", type=Path, default=COMMESSE_PREPROCESSED_PATH)
+    p_c_db.add_argument("--embeddings", type=Path, default=COMMESSE_EMBEDDINGS_PATH)
+    p_c_db.add_argument("--dest", type=Path, default=COMMESSE_DB_READY_PATH)
+
     return parser
 
 
@@ -135,6 +208,14 @@ def main(argv: list[str] | None = None) -> None:
         run_embeddings_summary(args.source, args.dest)
     elif args.command == "search":
         run_search(args.query, embeddings_path=args.embeddings, top_k=args.top_k, alpha=args.alpha)
+    elif args.command == "commesse-ingest":
+        run_commesse_ingest(args.source, args.dest)
+    elif args.command == "commesse-preprocess":
+        run_commesse_preprocess(args.source, args.dest)
+    elif args.command == "commesse-embed":
+        run_commesse_embed(args.source, args.dest)
+    elif args.command == "commesse-db-ready":
+        run_commesse_db_ready(args.preprocessed, args.embeddings, args.dest)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from openai import OpenAI
 from psycopg.rows import dict_row
 
 from ..config import (
+    COMMESSE_SOURCE_COLUMNS,
     RAW_SOURCE_COLUMNS,
     SQL_DEFAULT_LIMIT,
     SQL_GENERATION_MODEL,
@@ -52,8 +53,43 @@ for raw_col in RAW_SOURCE_COLUMNS:
 
 ORDERS_SCHEMA_TEXT = "\n".join(
     [
+        "Dataset origin: ICOP SpA procurement — orders placed by ICOP to external suppliers.",
         "Table: orders (read-only)",
         *(f"- {name}: {desc}" for name, desc in ORDERS_COLUMNS.items()),
+    ]
+)
+
+COMMESSE_COLUMNS: dict[str, str] = {
+    "record_id": "Internal synthetic id for each commessa row.",
+    "commessa_code": "Original num_commessa value from the Excel.",
+    "ditta": "Ditta field from source.",
+    "nome_commessa": "Project/commessa name.",
+    "settore": "Settore column from source.",
+    "mgo": "MGO column from source.",
+    "committente": "Client / contracting entity.",
+    "cliente": "Alias of committente (same content).",
+    "ente_appaltante": "Ente appaltante column from source.",
+    "oggetto": "Oggetto as provided in the source file.",
+    "oggetto_filled": "Oggetto populated with nome_commessa + settore + committente when the original oggetto is empty.",
+    "importo": "Importo column as numeric.",
+    "consegna": "Consegna date.",
+    "ultimazione": "Ultimazione/completion date.",
+    "codice_gara": "Codice gara column.",
+    "responsabile_commessa": "Responsabile commessa column.",
+    "responsabile_cantiere": "Responsabile cantiere column.",
+    "preposti": "Preposti column.",
+    "text_raw": "Text used for embeddings (oggetto_filled).",
+    "text_normalized": "Normalized version of text_raw.",
+    "oggetto_embedding": "Vector embedding of oggetto_filled text.",
+}
+for raw_col in COMMESSE_SOURCE_COLUMNS:
+    COMMESSE_COLUMNS.setdefault(raw_col, "Raw column from the commesse source file (kept verbatim).")
+
+COMMESSE_SCHEMA_TEXT = "\n".join(
+    [
+        "Dataset origin: ICOP SpA commesse — works/projects executed by ICOP over the years.",
+        "Table: commesse (read-only)",
+        *(f"- {name}: {desc}" for name, desc in COMMESSE_COLUMNS.items()),
     ]
 )
 
@@ -248,7 +284,7 @@ class AnalyticsEngine:
             sql,
             default_limit=enforced_limit,
             max_limit=self.max_limit,
-            allowed_tables={"orders"},
+            allowed_tables={"orders", "commesse"},
         )
 
         def _execute(active_conn: psycopg.Connection) -> QueryResult:
